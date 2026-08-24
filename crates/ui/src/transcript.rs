@@ -40,7 +40,7 @@ use gpui::{
 };
 
 use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentStatus};
-use zeron_proto::ToolCall;
+use zeron_proto::{HarnessId, ToolCall};
 
 use crate::markdown::parser::{
     Block, BlockTree, IncrementalParser, InlineRun, InlineStyle, parse_full,
@@ -2314,6 +2314,12 @@ enum BlobFetch {
 /// Shell-facing events (the transcript itself hosts no surfaces).
 #[derive(Debug, Clone)]
 pub enum TranscriptEvent {
+    /// Fork the selected completed response through the source chat's native
+    /// harness session, then navigate to the newly created chat.
+    ForkRequested {
+        chat_id: String,
+        entry_id: String,
+    },
     /// A spawn chip's "Open subagent" affordance: open the subagent's
     /// transcript as a right-pane tab. `chat_id` is the doc the chip lives
     /// in (the frozen blob is keyed `{chat_id}/{doc_id}`); `frozen` means
@@ -4349,6 +4355,18 @@ impl Transcript {
         let copied_message = self.copied_message.as_ref() == Some(&row.entry_id);
         let copy_text = row.copy_text.clone();
         let copy_entry_id = row.entry_id.clone();
+        let fork_target = (!is_user_row && self.doc_override.is_none())
+            .then(|| {
+                let chat_id = self.chat_id.clone()?;
+                let enabled = self
+                    .state
+                    .read(cx)
+                    .selected_chat_row()
+                    .and_then(|chat| chat.config.as_ref())
+                    .is_some_and(|config| config.harness == HarnessId::Codex);
+                enabled.then(|| (chat_id, row.entry_id.to_string()))
+            })
+            .flatten();
         let strip = row.timestamp.map(|ms| {
             let timestamp = div()
                 .text_size(crate::typography::ui_rems(12.0))
@@ -4386,12 +4404,68 @@ impl Transcript {
                         .text_color(theme.text_muted),
                     )
             });
-            let metadata = div()
+            let fork = fork_target.map(|(chat_id, entry_id)| {
+                let hover_id = format!("fork-message-hover-{entry_id}");
+                div()
+                    .id(SharedString::from(format!("fork-message-{entry_id}")))
+                    .size(px(Theme::SPACE_MD * 2.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(Theme::CONTROL_RADIUS))
+                    .cursor_pointer()
+                    .bg(motion::hover_blend(
+                        &hover_id,
+                        gpui::transparent_black(),
+                        crate::theme::ink(0.08),
+                    ))
+                    .on_hover(motion::hover_listener(hover_id))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(TranscriptEvent::ForkRequested {
+                            chat_id: chat_id.clone(),
+                            entry_id: entry_id.clone(),
+                        });
+                    }))
+                    .child(
+                        crate::icons::icon(crate::icons::GIT_BRANCH)
+                            .size(px(14.0))
+                            .text_color(theme.text_muted),
+                    )
+            });
+            let bookmark = div()
+                .id(SharedString::from(format!("bookmark-message-{}", row.entry_id)))
+                .size(px(Theme::SPACE_MD * 2.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(Theme::CONTROL_RADIUS))
+                .cursor_pointer()
+                .bg(motion::hover_blend(
+                    &format!("bookmark-message-hover-{}", row.entry_id),
+                    gpui::transparent_black(),
+                    crate::theme::ink(0.08),
+                ))
+                .on_hover(motion::hover_listener(format!(
+                    "bookmark-message-hover-{}",
+                    row.entry_id
+                )))
+                .child(
+                    crate::icons::icon(crate::icons::FLAG)
+                        .size(px(14.0))
+                        .text_color(theme.text_muted),
+                );
+            let actions = div()
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(Theme::SPACE_SM));
-            let metadata = metadata.child(timestamp).children(copy);
+                .gap(px(2.0))
+                .children(copy)
+                .children(fork)
+                .child(bookmark);
+            let metadata = div().flex().flex_row().items_center().gap(px(Theme::SPACE_SM));
+            let metadata = metadata
+                .child(timestamp)
+                .child(actions);
             div()
                 .h(px(Theme::SPACE_SM + Theme::SPACE_MD * 2.0))
                 .pt(px(Theme::SPACE_SM))

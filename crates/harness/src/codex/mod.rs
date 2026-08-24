@@ -58,7 +58,7 @@ use zeron_proto::{
 };
 
 use crate::jsonrpc::{Incoming, RpcClient};
-use crate::{Harness, HarnessError, RunControls};
+use crate::{ForkRequest, ForkResult, ForkScope, Harness, HarnessError, RunControls};
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, static_models, to_effort};
 use normalize::{
     ChildRoute, Phase, delta_text, item_id, item_type, map_item, notification_thread_id,
@@ -288,6 +288,9 @@ impl Harness for CodexHarness {
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
         REASONING_LEVELS
     }
+    fn fork_scope(&self) -> ForkScope {
+        ForkScope::Turn
+    }
     fn installed(&self) -> bool {
         self.executable.is_some() || resolve_codex_executable().is_some()
     }
@@ -312,6 +315,76 @@ impl Harness for CodexHarness {
             .get_or_try_init(|| self.discover_commands())
             .await
             .cloned()
+    }
+
+    /// Materialize a native Codex thread fork without starting a turn. A
+    /// dedicated short-lived app-server is intentional: completed Comet
+    /// turns park or reap their run process, while the persisted rollout is
+    /// independently addressable by thread id.
+    async fn fork_session(&self, request: ForkRequest) -> Result<ForkResult, HarnessError> {
+        let exe = self.resolve_executable()?;
+        let mut cmd = Command::new(&exe);
+        cmd.arg("app-server");
+        crate::compose_child_path(&mut cmd, &exe);
+        if !request.cwd.is_empty() {
+            cmd.current_dir(&request.cwd);
+        }
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                HarnessError::NotInstalled(exe.display().to_string())
+            } else {
+                HarnessError::Io(e)
+            }
+        })?;
+        let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            shutdown_child(&mut child, self.kill_grace).await;
+            return Err(HarnessError::Protocol("codex child has no stdio".into()));
+        };
+        // Keep the incoming receiver alive while RpcClient's reader task
+        // routes responses; fork emits notifications that we do not need.
+        let (client, _incoming) = RpcClient::new(stdin, stdout);
+        let result = tokio::time::timeout(Duration::from_secs(30), async {
+            client
+                .request(
+                    "initialize",
+                    json!({
+                        "clientInfo": {
+                            "name": "zeron-native",
+                            "title": "Zeron",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        },
+                        "capabilities": { "experimentalApi": true },
+                    }),
+                )
+                .await?;
+            client.notify("initialized", None);
+            let mut params = serde_json::Map::new();
+            params.insert("threadId".into(), Value::String(request.session_id));
+            params.insert("excludeTurns".into(), Value::Bool(true));
+            if let Some(boundary) = request.boundary_id {
+                params.insert("lastTurnId".into(), Value::String(boundary));
+            }
+            let response = client
+                .request("thread/fork", Value::Object(params))
+                .await?;
+            let session_id = response
+                .pointer("/thread/id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| {
+                    HarnessError::Protocol("thread/fork returned no thread id".into())
+                })?
+                .to_owned();
+            Ok(ForkResult { session_id })
+        })
+        .await
+        .unwrap_or_else(|_| Err(HarnessError::Protocol("thread/fork timed out".into())));
+        shutdown_child(&mut child, self.kill_grace).await;
+        result
     }
 
     async fn run(
@@ -654,7 +727,13 @@ async fn run_session(session: Session) {
     // `thread/started` carrying a spawn source.
     let mut children: HashMap<String, String> = HashMap::new();
     match start_turn(&client, turn_params(&request.prompt)).await {
-        Ok(id) => router.adopt_started(id),
+        Ok(id) => {
+            router.adopt_started(id.clone());
+            if !send(&event_tx, AgentEvent::HarnessTurnStarted { turn_id: id }).await {
+                shutdown_child(&mut child, kill_grace).await;
+                return;
+            }
+        }
         Err(e) => {
             let _ = event_tx
                 .send(Ok(AgentEvent::Done {
@@ -1273,10 +1352,10 @@ async fn steer_as_new_turn(
 ) -> bool {
     match start_turn(client, params).await {
         Ok(id) => {
-            router.adopt_started(id);
+            router.adopt_started(id.clone());
             *done_current = false;
             let (prev, next) = rotate(assistant_message_id);
-            send(
+            if !send(
                 event_tx,
                 AgentEvent::Steered {
                     assistant_message_id: Some(prev),
@@ -1284,6 +1363,10 @@ async fn steer_as_new_turn(
                 },
             )
             .await
+            {
+                return false;
+            }
+            send(event_tx, AgentEvent::HarnessTurnStarted { turn_id: id }).await
         }
         Err(e) => {
             let _ = send(

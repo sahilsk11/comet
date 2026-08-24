@@ -1333,6 +1333,10 @@ async fn drive_run(
     let mut interrupt_deadline: Option<tokio::time::Instant> = None;
     let mut interrupted = false;
     let mut saw_session_started = false;
+    // Native provider boundary governing the current assistant segment. Codex
+    // emits this immediately after turn/start; it is stamped only once the
+    // terminal assistant entry is complete.
+    let mut harness_turn_id: Option<String> = None;
     // Liveness heartbeat: this loop RUNNING is proof the harness stream is
     // open, so freshness must not depend on events arriving. Silent stretches
     // are normal and UNBOUNDED — a long tool call, redacted thinking, an
@@ -1972,6 +1976,9 @@ async fn drive_run(
             } => {
                 inner.remember_harness_session(&chat_id, session_id, &run_cwd);
             }
+            AgentEvent::HarnessTurnStarted { turn_id } => {
+                harness_turn_id = Some(turn_id.clone());
+            }
             AgentEvent::InputRequested { .. } => {
                 // Known-id guaranteed: the unknown-id twin was dropped above,
                 // before the parked gate.
@@ -2042,9 +2049,15 @@ async fn drive_run(
                     message_status,
                 ) {
                     tracing::warn!(chat = %chat_id, error = %err, "final segment finish failed");
+                } else if let Some(turn_id) = harness_turn_id.as_deref()
+                    && let Err(err) = doc_ref.set_message_harness_turn_id(&entry_id, turn_id)
+                {
+                    tracing::warn!(chat = %chat_id, entry = %entry_id, error = %err,
+                        "native turn boundary stamp failed");
                 }
                 inner.note_message(&chat_id, &folded_text(&folded));
             }
+            harness_turn_id = None;
             if *status == DoneStatus::Completed {
                 // A cleanly completed turn resets the auto-resume revival
                 // budget: only consecutive crash-revive-crash cycles spend it.

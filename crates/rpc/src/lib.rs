@@ -40,6 +40,11 @@ pub mod methods {
     pub const LIST_MODELS: &str = "ListModels";
     pub const LIST_COMMANDS: &str = "ListCommands";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
+    /// Fork a chat through its provider-native session primitive. The request
+    /// is routed to the source chat's host device, where the harness cache and
+    /// native session live. Params `{sourceChatId, destinationChatId, entryId,
+    /// targetDeviceId}`; replies with `{chat}`.
+    pub const FORK_CHAT: &str = "ForkChat";
     /// Peer-to-peer delivery fallback: the SENDER's engine forwards a queued
     /// command entry (client-minted id and all) straight over the device-room
     /// link when its chat2 rows can't reach the edge but the host's peer link

@@ -56,8 +56,11 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tokio::sync::watch;
 
-use zeron_doc::{MessagePart, SessionCommandPayload};
-use zeron_proto::{ChatConfig, EngineInfo, HarnessId, ToolCall, WorkspaceScope};
+use zeron_doc::{MessagePart, SessionCommandPayload, SessionMessageEntry};
+use zeron_harness::{ForkRequest, ForkScope};
+use zeron_proto::{
+    ChatConfig, EngineInfo, HarnessId, SessionStatus, ToolCall, WorkspaceScope,
+};
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
 
 use crate::agent_accounts::AgentAccounts;
@@ -104,6 +107,14 @@ struct QueueCommandParams {
     /// durably queued — never as a gate in front of it.
     #[serde(default)]
     transfers: Vec<crate::uploads::AttachmentTransfer>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ForkChatParams {
+    source_chat_id: String,
+    destination_chat_id: String,
+    entry_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -296,6 +307,31 @@ struct FetchToolBlobParams {
     blob_ref: String,
 }
 
+fn failed(error: impl std::fmt::Display) -> RpcError {
+    RpcError::Failed(error.to_string())
+}
+
+/// Copy the visible transcript through the selected root entry. Streaming
+/// continuations belonging to that entry are included as part of the same
+/// response; the next independent entry belongs to the future branch and is
+/// intentionally excluded.
+fn fork_transcript_prefix(
+    entries: &[SessionMessageEntry],
+    boundary_entry_id: &str,
+) -> Option<Vec<SessionMessageEntry>> {
+    let boundary = entries
+        .iter()
+        .position(|entry| entry.id == boundary_entry_id)?;
+    let mut end = boundary + 1;
+    while entries
+        .get(end)
+        .is_some_and(|entry| entry.continuation_of.as_deref() == Some(boundary_entry_id))
+    {
+        end += 1;
+    }
+    Some(entries[..end].to_vec())
+}
+
 /// The Mutate surface (feature-inventory §2 DataRpc), tagged by `op`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -470,6 +506,159 @@ impl EngineRpc {
     pub fn with_local_import(mut self, importer: crate::local_import::LocalImporter) -> Self {
         self.local_import = Some(importer);
         self
+    }
+
+    /// Execute a provider-native fork on the device that owns the source chat,
+    /// then publish a new Comet chat pointing at the returned native session.
+    /// Cloudflare transports this RPC and the resulting docs; it never has to
+    /// understand or reproduce a provider's local session cache.
+    async fn fork_chat(&self, p: ForkChatParams) -> Result<RpcReply, RpcError> {
+        if let Some(chat) = self
+            .workspace
+            .chat(&p.destination_chat_id)
+            .map_err(failed)?
+        {
+            if chat
+                .harness_session_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+            {
+                return RpcReply::value(&serde_json::json!({ "chat": chat }));
+            }
+            return Err(RpcError::Failed(
+                "the destination chat id already exists".into(),
+            ));
+        }
+
+        let source = self
+            .workspace
+            .chat(&p.source_chat_id)
+            .map_err(failed)?
+            .ok_or_else(|| RpcError::Failed("source chat not found".into()))?;
+        if source.device_id != self.doc_host.device_id() {
+            return Err(RpcError::Failed(format!(
+                "source chat belongs to device {}",
+                source.device_id
+            )));
+        }
+        if self.sessions.session_status(&source.id).is_some_and(|session| {
+            matches!(
+                session.status,
+                SessionStatus::Working | SessionStatus::AwaitingInput
+            )
+        }) {
+            return Err(RpcError::Failed(
+                "wait for the current response to finish before forking".into(),
+            ));
+        }
+
+        let config = source
+            .config
+            .clone()
+            .ok_or_else(|| RpcError::Failed("source chat has no harness configuration".into()))?;
+        let source_session_id = source
+            .harness_session_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                RpcError::Failed("source chat has no provider session to fork".into())
+            })?;
+        let cwd = source
+            .harness_session_cwd
+            .clone()
+            .or_else(|| source.cwd.clone())
+            .ok_or_else(|| RpcError::Failed("source chat has no working directory".into()))?;
+
+        let source_doc = self
+            .doc_host
+            .open(&source.id)
+            .map_err(failed)?;
+        let source_entries = source_doc.doc().read_entries().map_err(failed)?;
+        let prefix = fork_transcript_prefix(&source_entries, &p.entry_id).ok_or_else(|| {
+            RpcError::Failed("the selected response is no longer in the transcript".into())
+        })?;
+        // Existing chats predate the native turn stamp. Their latest visible
+        // response is still safe: omitting lastTurnId asks Codex to fork the
+        // whole current thread. An older response needs its exact native id;
+        // guessing from Comet message ids would create the wrong history.
+        let boundary_id = source_doc.doc().message_harness_turn_id(&p.entry_id);
+        if boundary_id.is_none() && prefix.len() != source_entries.len() {
+            return Err(RpcError::Failed(
+                "that older response has no native fork boundary; fork the latest response or use one completed after this update"
+                    .into(),
+            ));
+        }
+        let prefix: Vec<_> = prefix
+            .into_iter()
+            .map(|entry| {
+                let native_turn = source_doc.doc().message_harness_turn_id(&entry.id);
+                (entry, native_turn)
+            })
+            .collect();
+
+        let harness = self
+            .registry
+            .resolve(config.harness)
+            .map_err(|err| RpcError::Failed(err.to_string()))?;
+        if !matches!(harness.fork_scope(), ForkScope::Turn | ForkScope::Message) {
+            return Err(RpcError::Failed(format!(
+                "{} does not support message-level session forks",
+                harness.display_name()
+            )));
+        }
+        let fork = harness
+            .fork_session(ForkRequest {
+                session_id: source_session_id.to_string(),
+                cwd: cwd.clone(),
+                boundary_id,
+            })
+            .await
+            .map_err(|err| RpcError::Failed(err.to_string()))?;
+
+        self.workspace
+            .create_chat(
+                &p.destination_chat_id,
+                source.space_id.as_deref(),
+                Some(&source.device_id),
+                Some(config),
+                Some(cwd.clone()),
+            )
+            .map_err(failed)?;
+        if let Some(title) = source.title.as_deref() {
+            self.workspace
+                .rename_chat(&p.destination_chat_id, title)
+                .map_err(failed)?;
+        }
+        if let Some(branch) = source.branch.as_deref() {
+            self.workspace
+                .set_chat_branch(&p.destination_chat_id, branch)
+                .map_err(failed)?;
+        }
+
+        let destination_doc = self
+            .doc_host
+            .open(&p.destination_chat_id)
+            .map_err(failed)?;
+        for (entry, native_turn) in prefix {
+            destination_doc.doc().push_message(&entry).map_err(failed)?;
+            if let Some(native_turn) = native_turn {
+                destination_doc
+                    .doc()
+                    .set_message_harness_turn_id(&entry.id, &native_turn)
+                    .map_err(failed)?;
+            }
+        }
+        self.workspace.set_chat_harness_session(
+            &p.destination_chat_id,
+            &fork.session_id,
+            &cwd,
+        );
+        let chat = self
+            .workspace
+            .chat(&p.destination_chat_id)
+            .map_err(failed)?
+            .ok_or_else(|| RpcError::Failed("forked chat was not persisted".into()))?;
+        RpcReply::value(&serde_json::json!({ "chat": chat }))
     }
 
     fn auth(&self) -> Result<&Auth, RpcError> {
@@ -883,7 +1072,7 @@ fn forward_deadline(method: &str) -> std::time::Duration {
         methods::CLONE_REPO | methods::FETCH_ALL | methods::APPLY_UPDATE => {
             Duration::from_secs(15 * 60)
         }
-        methods::CREATE_WORKTREE => Duration::from_secs(120),
+        methods::CREATE_WORKTREE | methods::FORK_CHAT => Duration::from_secs(120),
         _ => Duration::from_secs(30),
     }
 }
@@ -899,6 +1088,7 @@ fn forwardable(method: &str) -> bool {
             | methods::LIST_MODELS
             | methods::LIST_COMMANDS
             | methods::QUEUE_COMMAND
+            | methods::FORK_CHAT
             | methods::WATCH_DOC_MESSAGES
             // Repos/worktrees/folders are device-local filesystem state.
             | methods::LIST_REPOS
@@ -1176,6 +1366,10 @@ impl RpcService for EngineRpc {
                     .queue_command_with_transfers(&p.chat_id, p.command, p.transfers)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "commandId": command_id }))
+            }
+            methods::FORK_CHAT => {
+                let p: ForkChatParams = parse_params(params)?;
+                self.fork_chat(p).await
             }
             methods::RETRY_DELIVERY => {
                 let p: ChatParams = parse_params(params)?;
@@ -1903,6 +2097,35 @@ impl RpcService for EngineRpc {
 mod tests {
     use super::*;
 
+    fn entry(id: &str, continuation_of: Option<&str>) -> SessionMessageEntry {
+        SessionMessageEntry {
+            id: id.into(),
+            role: zeron_doc::MessageRole::Assistant,
+            parts: Vec::new(),
+            created_at: 0,
+            device_id: "dev".into(),
+            status: Some(zeron_doc::MessageStatus::Complete),
+            continuation_of: continuation_of.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn fork_prefix_includes_boundary_continuations_but_not_the_future() {
+        let entries = vec![
+            entry("user-1", None),
+            entry("answer-1", None),
+            entry("answer-1b", Some("answer-1")),
+            entry("user-2", None),
+        ];
+        let ids: Vec<_> = fork_transcript_prefix(&entries, "answer-1")
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(ids, ["user-1", "answer-1", "answer-1b"]);
+        assert!(fork_transcript_prefix(&entries, "missing").is_none());
+    }
+
     /// The UI's Switch/Forget calls send `{id, accountId, harness}` (+ optional
     /// `targetDeviceId`); the extra fields must be tolerated, `accountId` wins.
     #[test]
@@ -1924,6 +2147,7 @@ mod tests {
         assert!(!forwardable(methods::ENGINE_INFO));
         assert!(!forwardable(methods::ENGINE_READY));
         assert!(forwardable(methods::QUEUE_COMMAND));
+        assert!(forwardable(methods::FORK_CHAT));
         assert!(forwardable(methods::SEARCH_FILES));
         assert!(forwardable(methods::FETCH_ALL));
         assert!(forwardable(methods::WATCH_CHECKOUT_CHANGE_REQUEST));
@@ -1951,6 +2175,10 @@ mod tests {
         assert_eq!(
             forward_deadline(methods::QUEUE_COMMAND),
             Duration::from_secs(30)
+        );
+        assert_eq!(
+            forward_deadline(methods::FORK_CHAT),
+            Duration::from_secs(120)
         );
     }
 

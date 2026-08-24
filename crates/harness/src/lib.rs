@@ -36,6 +36,33 @@ pub enum HarnessError {
     Install(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("session fork is not supported by {0}")]
+    ForkUnsupported(String),
+}
+
+/// The finest native history boundary a harness can fork at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkScope {
+    Unsupported,
+    WholeSession,
+    Turn,
+    Message,
+}
+
+/// Provider-native fork request. The source session stays untouched; a
+/// successful call returns a new harness session id that can be resumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForkRequest {
+    pub session_id: String,
+    pub cwd: String,
+    /// Inclusive native turn/message boundary. Required by Comet's
+    /// message-level UI for bounded forks.
+    pub boundary_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForkResult {
+    pub session_id: String,
 }
 
 /// A steer prompt pushed into a live run; delivered at the harness's steering boundary.
@@ -65,6 +92,9 @@ pub trait Harness: Send + Sync {
     fn supports_steering(&self) -> bool;
     fn steering_mode(&self) -> SteeringMode;
     fn reasoning_levels(&self) -> &[ReasoningLevel];
+    fn fork_scope(&self) -> ForkScope {
+        ForkScope::Unsupported
+    }
     /// Whether the agent's own CLI is present on this device — the settings
     /// gate for enabling the harness. A filesystem probe, never a spawn.
     /// Defaults to true for harnesses without a CLI to check (mock).
@@ -84,6 +114,11 @@ pub trait Harness: Send + Sync {
     /// for harnesses without them. May spawn a short-lived discovery process.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         Ok(Vec::new())
+    }
+    async fn fork_session(&self, _request: ForkRequest) -> Result<ForkResult, HarnessError> {
+        Err(HarnessError::ForkUnsupported(
+            self.display_name().to_owned(),
+        ))
     }
     /// Run one (persistent) session; the stream ends with `AgentEvent::Done`.
     async fn run(

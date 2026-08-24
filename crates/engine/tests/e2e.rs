@@ -60,6 +60,9 @@ fn mock_script() -> Vec<AgentEvent> {
             session_id: "hs-1".into(),
             assistant_message_id: "a-1".into(),
         },
+        AgentEvent::HarnessTurnStarted {
+            turn_id: "turn-native-1".into(),
+        },
         AgentEvent::TextDelta { text: "Hel".into() },
         AgentEvent::TextDelta { text: "lo".into() },
         AgentEvent::ToolCall {
@@ -270,6 +273,13 @@ async fn queued_run_command_executes_end_to_end() {
     // render-parts privacy policy applied (WriteFile content stripped).
     let assistant = &all[1];
     assert_eq!(assistant.status, Some(MessageStatus::Complete));
+    assert_eq!(
+        handle
+            .doc()
+            .message_harness_turn_id(&assistant.id)
+            .as_deref(),
+        Some("turn-native-1")
+    );
     assert_eq!(assistant.parts.len(), 2);
     match &assistant.parts[0] {
         MessagePart::Text { text, .. } => assert_eq!(text, "Hello"),

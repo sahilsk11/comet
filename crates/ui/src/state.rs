@@ -594,6 +594,10 @@ pub struct AppState {
     pub spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
+    /// Successful create/fork replies that have not appeared in the workspace
+    /// watch yet. Keeping these rows visible prevents an older Cloudflare
+    /// frame from immediately clearing a just-navigated selection.
+    pending_chats: HashMap<String, Chat>,
     pub sessions: Vec<Session>,
     /// The project the new-session canvas mints into. Healed by
     /// [`Self::apply_spaces`] when the row vanishes; selecting a chat implies
@@ -679,6 +683,7 @@ impl AppState {
             connectivity: zeron_proto::Connectivity::default(),
             spaces: Vec::new(),
             chats: Vec::new(),
+            pending_chats: HashMap::new(),
             sessions: Vec::new(),
             selected_space: None,
             no_project: false,
@@ -751,6 +756,16 @@ impl AppState {
     // ---- reducers (pure) ----
 
     pub fn apply_chats(&mut self, mut chats: Vec<Chat>) {
+        let landed: Vec<_> = self
+            .pending_chats
+            .keys()
+            .filter(|id| chats.iter().any(|chat| &chat.id == *id))
+            .cloned()
+            .collect();
+        for id in landed {
+            self.pending_chats.remove(&id);
+        }
+        chats.extend(self.pending_chats.values().cloned());
         sort_chats(&mut chats);
         self.chats = chats;
         self.chats_synced = true;
@@ -767,6 +782,18 @@ impl AppState {
 
     pub fn apply_sessions(&mut self, sessions: Vec<Session>) {
         self.sessions = sessions;
+    }
+
+    /// Optimistically surface a chat returned by an engine mutation until the
+    /// eventually consistent workspace watch carries the authoritative row.
+    pub fn upsert_pending_chat(&mut self, chat: Chat) {
+        self.pending_chats.insert(chat.id.clone(), chat.clone());
+        if let Some(row) = self.chats.iter_mut().find(|row| row.id == chat.id) {
+            *row = chat;
+        } else {
+            self.chats.push(chat);
+        }
+        sort_chats(&mut self.chats);
     }
 
     pub fn apply_spaces(&mut self, mut spaces: Vec<Space>) {
@@ -1363,6 +1390,7 @@ impl AppState {
         self.devices.clear();
         self.spaces.clear();
         self.chats.clear();
+        self.pending_chats.clear();
         self.sessions.clear();
         self.selected_space = None;
         self.no_project = false;
@@ -3018,6 +3046,25 @@ mod tests {
         state.selected_chat = Some("b".into());
         state.apply_chats(vec![chat("b", 1, None), chat("c", 2, None)]);
         assert_eq!(state.selected_chat.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn pending_chat_survives_stale_watch_then_retires_when_landed() {
+        let mut state = AppState::new();
+        let fork = chat("fork", 2, None);
+        state.upsert_pending_chat(fork.clone());
+        state.selected_chat = Some("fork".into());
+
+        state.apply_chats(vec![chat("source", 1, None)]);
+        assert_eq!(state.selected_chat.as_deref(), Some("fork"));
+        assert!(state.chats.iter().any(|chat| chat.id == "fork"));
+
+        state.apply_chats(vec![chat("source", 1, None), fork]);
+        assert!(state.pending_chats.is_empty());
+        assert_eq!(
+            state.chats.iter().filter(|chat| chat.id == "fork").count(),
+            1
+        );
     }
 
     #[test]

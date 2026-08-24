@@ -437,6 +437,59 @@ impl SessionDoc {
         Ok(false)
     }
 
+    /// Attach a provider-native completed-turn boundary to one transcript
+    /// entry. This stays out of the render DTO deliberately: only the host
+    /// needs it when translating a Comet message click into a harness fork.
+    pub fn set_message_harness_turn_id(
+        &self,
+        message_id: &str,
+        turn_id: &str,
+    ) -> Result<bool, DocError> {
+        let messages = self.doc.get_list("messages");
+        for i in 0..messages.len() {
+            if let Some(loro::ValueOrContainer::Container(loro::Container::Map(map))) =
+                messages.get(i)
+            {
+                let id_matches = matches!(
+                    map.get("id"),
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == message_id
+                );
+                if id_matches {
+                    map.insert("harnessTurnId", turn_id)?;
+                    self.doc.commit();
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Provider-native completed-turn boundary previously stamped on an
+    /// entry, if this message is a forkable boundary.
+    pub fn message_harness_turn_id(&self, message_id: &str) -> Option<String> {
+        let messages = self.doc.get_list("messages");
+        for i in 0..messages.len() {
+            let Some(loro::ValueOrContainer::Container(loro::Container::Map(map))) =
+                messages.get(i)
+            else {
+                continue;
+            };
+            let id_matches = matches!(
+                map.get("id"),
+                Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == message_id
+            );
+            if id_matches {
+                return match map.get("harnessTurnId") {
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) => {
+                        Some(s.to_string())
+                    }
+                    _ => None,
+                };
+            }
+        }
+        None
+    }
+
     /// Append an error part to an existing entry (crash recovery: the aborted
     /// entry must SAY why it ended — "Run interrupted by engine restart…" —
     /// not just truncate silently). Returns `false` when no entry matches.
@@ -1187,6 +1240,16 @@ mod tests {
             }]
         );
         assert_eq!(doc.chat_id().as_deref(), Some("chat-1"));
+    }
+
+    #[test]
+    fn native_turn_boundary_is_host_metadata_not_render_data() {
+        let doc = SessionDoc::init("chat-1").unwrap();
+        doc.push_message(&user_entry("m1", "hello")).unwrap();
+        assert_eq!(doc.message_harness_turn_id("m1"), None);
+        assert!(doc.set_message_harness_turn_id("m1", "turn-7").unwrap());
+        assert_eq!(doc.message_harness_turn_id("m1").as_deref(), Some("turn-7"));
+        assert_eq!(doc.read_entries().unwrap(), vec![user_entry("m1", "hello")]);
     }
 
     #[test]

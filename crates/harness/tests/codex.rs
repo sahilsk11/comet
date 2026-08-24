@@ -9,7 +9,8 @@ use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
 use zeron_harness::{
-    CancellationToken, CodexHarness, Harness, HarnessError, RunControls, SteerMessage,
+    CancellationToken, CodexHarness, ForkRequest, ForkScope, Harness, HarnessError, RunControls,
+    SteerMessage,
 };
 use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, ReasoningLevel, RunRequest, SandboxLevel, TodoItem,
@@ -119,6 +120,9 @@ async fn happy_path_maps_deltas_items_usage_and_done() {
     assert_eq!(model, "gpt-5.6-sol");
     assert_eq!(cwd, "/tmp");
     assert_eq!(session_id, "th-1");
+    assert!(events.contains(&AgentEvent::HarnessTurnStarted {
+        turn_id: "t-1".into(),
+    }));
 
     // Deltas — both wire spellings accepted.
     assert!(events.contains(&AgentEvent::TextDelta {
@@ -273,6 +277,34 @@ async fn happy_path_maps_deltas_items_usage_and_done() {
             session_id: Some("th-1".into()),
         })
     );
+}
+
+#[tokio::test]
+async fn native_fork_uses_the_codex_turn_boundary() {
+    let harness = harness();
+    assert_eq!(harness.fork_scope(), ForkScope::Turn);
+    let fork = harness
+        .fork_session(ForkRequest {
+            session_id: "th-source".into(),
+            cwd: "/tmp".into(),
+            boundary_id: Some("t-boundary".into()),
+        })
+        .await
+        .expect("native fork");
+    assert_eq!(fork.session_id, "th-forked");
+}
+
+#[tokio::test]
+async fn native_fork_can_copy_the_whole_current_thread() {
+    let fork = harness()
+        .fork_session(ForkRequest {
+            session_id: "th-whole".into(),
+            cwd: "/tmp".into(),
+            boundary_id: None,
+        })
+        .await
+        .expect("whole-thread native fork");
+    assert_eq!(fork.session_id, "th-whole-forked");
 }
 
 #[tokio::test]

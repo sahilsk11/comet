@@ -340,6 +340,11 @@ pub enum AgentEvent {
         session_id: String,
         assistant_message_id: String,
     },
+    /// Provider-native boundary for the turn whose output follows. Persisted
+    /// against the completed assistant entry so message-level fork actions can
+    /// address the harness without reconstructing its history.
+    #[serde(rename_all = "camelCase")]
+    HarnessTurnStarted { turn_id: String },
     TextDelta {
         text: String,
     },

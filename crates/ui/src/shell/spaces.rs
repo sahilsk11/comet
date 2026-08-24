@@ -357,6 +357,101 @@ impl Shell {
                 .into_any_element()
         }
     }
+    // ---- sidebar mode ----
+
+    pub(super) fn set_sidebar_mode(&mut self, mode: SidebarMode, cx: &mut Context<Self>) {
+        if self.sidebar_mode == mode {
+            return;
+        }
+        self.sidebar_mode = mode;
+        self.close_spaces_menu(cx);
+        cx.notify();
+    }
+
+    fn render_sidebar_mode_button(
+        &self,
+        mode: SidebarMode,
+        label: &'static str,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selected = self.sidebar_mode == mode;
+        let hover_key = format!("sidebar-mode-hover-{}", label.to_lowercase());
+        div()
+            .id(SharedString::from(format!(
+                "sidebar-mode-{}",
+                label.to_lowercase()
+            )))
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(px(26.0))
+            .rounded(px(7.0))
+            .text_size(px(11.0))
+            .font_weight(if selected {
+                gpui::FontWeight::MEDIUM
+            } else {
+                gpui::FontWeight::NORMAL
+            })
+            .text_color(motion::hover_blend(
+                &hover_key,
+                if selected {
+                    theme.text
+                } else {
+                    theme.text_muted
+                },
+                theme.text,
+            ))
+            .bg(motion::hover_blend(
+                &hover_key,
+                if selected {
+                    crate::theme::glass_selected_bg()
+                } else {
+                    crate::theme::wash(0.0)
+                },
+                theme.glass_hover(),
+            ))
+            .on_hover(motion::hover_listener(hover_key))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_sidebar_mode(mode, cx);
+            }))
+            .child(SharedString::from(label))
+            .into_any_element()
+    }
+
+    pub(super) fn render_sidebar_mode_switch(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .flex_none()
+            .mx(px(Theme::SPACE_SM))
+            .mt(px(8.0))
+            .mb(px(4.0))
+            .p(px(3.0))
+            .flex()
+            .flex_row()
+            .gap(px(2.0))
+            .rounded(px(10.0))
+            .bg(crate::theme::wash(0.08))
+            .child(self.render_sidebar_mode_button(
+                SidebarMode::Projects,
+                "Projects",
+                theme,
+                cx,
+            ))
+            .child(self.render_sidebar_mode_button(
+                SidebarMode::Sessions,
+                "Sessions",
+                theme,
+                cx,
+            ))
+            .into_any_element()
+    }
+
     // ---- space filter ----
 
     /// Set the sidebar's session filter (`None` = All spaces). On the

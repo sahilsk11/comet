@@ -334,6 +334,12 @@ pub enum SettingsSection {
     Archived,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SidebarMode {
+    Projects,
+    Sessions,
+}
+
 impl SettingsSection {
     pub const ALL: [SettingsSection; 7] = [
         SettingsSection::Devices,
@@ -1062,6 +1068,8 @@ pub struct Shell {
     sidebar_view_menu: popover::Popup<spaces::SidebarViewMenu>,
     /// Natural-tab-order focus target for the icon-only view-options button.
     sidebar_view_trigger_focus: gpui::FocusHandle,
+    /// Whether the sidebar is browsing projects or individual sessions.
+    sidebar_mode: SidebarMode,
     /// Chat id whose STATUS CORNER is under the pointer — just that corner
     /// swaps to the archive button (t3code's settle-on-hover); hovering the
     /// row body leaves the status readable.
@@ -1076,6 +1084,9 @@ pub struct Shell {
     user_menu: popover::Popup<()>,
     /// Inline sidebar error strip (mutation failures); click dismisses.
     sidebar_notice: Option<SharedString>,
+    /// One provider-native session fork at a time. The engine call may cross
+    /// the device relay and spawn a short-lived harness process.
+    fork_task: Option<Task<()>>,
     /// Local lifecycle of an in-app update (macOS bundle swap) — the engine's
     /// UpdateStatus stream says WHETHER one exists; this says how far the
     /// download/stage of it has come in this process.
@@ -1333,12 +1344,15 @@ impl Shell {
             spaces_menu: popover::Popup::default(),
             sidebar_view_menu: popover::Popup::default(),
             sidebar_view_trigger_focus: cx.focus_handle().tab_stop(true),
+            // Preserve the existing sidebar as the default Projects view.
+            sidebar_mode: SidebarMode::Projects,
             chat_status_hover: None,
             sidebar_scroll: gpui::ScrollHandle::new(),
             space_boot_applied: false,
             sound_prev: std::collections::HashMap::new(),
             user_menu: popover::Popup::default(),
             sidebar_notice: None,
+            fork_task: None,
             update_flow: UpdateFlow::Idle,
             update_task: None,
             update_dismissed: None,
@@ -1973,6 +1987,9 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match event {
+            TranscriptEvent::ForkRequested { chat_id, entry_id } => {
+                self.fork_chat(chat_id.clone(), entry_id.clone(), cx);
+            }
             TranscriptEvent::OpenSubagent {
                 chat_id,
                 doc_id,
@@ -1988,6 +2005,65 @@ impl Shell {
                 );
             }
         }
+    }
+
+    fn fork_chat(&mut self, source_chat_id: String, entry_id: String, cx: &mut Context<Self>) {
+        if self.fork_task.is_some() {
+            return;
+        }
+        let (engine, target_device_id) = {
+            let state = self.state.read(cx);
+            let Some(engine) = state.engine().cloned() else {
+                self.sidebar_notice = Some("Engine not connected".into());
+                cx.notify();
+                return;
+            };
+            let Some(chat) = state.chats.iter().find(|chat| chat.id == source_chat_id) else {
+                self.sidebar_notice = Some("Source session is no longer available".into());
+                cx.notify();
+                return;
+            };
+            (engine, chat.device_id.clone())
+        };
+        let destination_chat_id = uuid::Uuid::new_v4().to_string();
+        let params = serde_json::json!({
+            "sourceChatId": source_chat_id,
+            "destinationChatId": destination_chat_id,
+            "entryId": entry_id,
+            "targetDeviceId": target_device_id,
+        });
+        self.sidebar_notice = None;
+        self.fork_task = Some(cx.spawn(async move |this, cx| {
+            let result = match engine.client().call(methods::FORK_CHAT, params).await {
+                Ok(value) => value
+                    .get("chat")
+                    .cloned()
+                    .ok_or_else(|| "fork response did not include a chat".to_string())
+                    .and_then(|value| {
+                        serde_json::from_value::<zeron_proto::Chat>(value)
+                            .map_err(|err| format!("invalid fork response: {err}"))
+                    }),
+                Err(err) => Err(err.to_string()),
+            };
+            this.update(cx, |shell, cx| {
+                shell.fork_task = None;
+                match result {
+                    Ok(chat) => {
+                        let chat_id = chat.id.clone();
+                        shell.state.update(cx, |state, cx| {
+                            state.upsert_pending_chat(chat);
+                            state.select_chat(Some(chat_id), cx);
+                        });
+                    }
+                    Err(err) => {
+                        shell.sidebar_notice =
+                            Some(format!("Couldn’t fork session: {err}").into());
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        }));
     }
 
     /// A spawn chip's "Open subagent": focus the existing tab for that doc,
@@ -4241,7 +4317,14 @@ impl Shell {
         // Keyed rows: (stable key, estimated height, element) — the key + height
         // list drives the §1.6 resort FLIP diff below (attention-bucket
         // promotions glide; cleared rows just go).
-        let keyed: Vec<(String, f32, AnyElement)> = self.render_active_rows(theme, cx);
+        let keyed: Vec<(String, f32, AnyElement)> = match self.sidebar_mode {
+            // Projects is the existing sidebar: the project filter plus the
+            // filtered session rows below it.
+            SidebarMode::Projects => self.render_active_rows(theme, cx),
+            // Sessions is intentionally a blank placeholder while we settle
+            // the message-level fork/bookmark model.
+            SidebarMode::Sessions => Vec::new(),
+        };
 
         // Resort glide (§1.6 View Transitions parity): when the ORDER of a live
         // list changes (new activity resort, grouping flip), surviving rows
@@ -4302,8 +4385,11 @@ impl Shell {
             })
             .collect();
 
-        // t3code's archived accordion, below the active list.
-        let archived_section = self.render_archived_section(theme, cx);
+        // Archived chats stay with the existing Projects view for now.
+        let archived_section = match self.sidebar_mode {
+            SidebarMode::Projects => self.render_archived_section(theme, cx),
+            SidebarMode::Sessions => None,
+        };
 
         let (user_line, trigger_subline, menu_identity): (
             SharedString,
@@ -4341,6 +4427,7 @@ impl Shell {
         // The space filter lives ABOVE the scroll region (fixed) so its
         // dropdown can float without being clipped by the list's overflow.
         let filter_row = self.render_spaces_filter(theme, cx);
+        let mode_switch = self.render_sidebar_mode_switch(theme, cx);
 
         div()
             .w(px(self.settings.sidebar_width))
@@ -4349,7 +4436,10 @@ impl Shell {
             .flex_col()
             // (No titlebar strip: the unified window titlebar spans the whole
             // window above this column.)
-            .child(filter_row)
+            .child(mode_switch)
+            .when(self.sidebar_mode == SidebarMode::Projects, |el| {
+                el.child(filter_row)
+            })
             // The (filtered) Sessions list scrolls inside an EdgeFade scope —
             // a true per-glyph gradient at active overflow edges. Glass-safe
             // (no painted overlay can fade content over see-through blur) and
@@ -4383,14 +4473,16 @@ impl Shell {
                                     .gap(px(2.0))
                                     .children(list_items)
                                     .into_any_element()
-                            } else {
+                            } else if self.sidebar_mode == SidebarMode::Projects {
                                 div()
                                     .px(px(Theme::SPACE_SM))
                                     .pb(px(Theme::SPACE_SM))
                                     .text_size(crate::typography::ui_rems(12.0))
                                     .text_color(theme.text_faint)
-                                    .child(SharedString::from("No sessions yet"))
+                                    .child("No sessions yet")
                                     .into_any_element()
+                            } else {
+                                div().into_any_element()
                             })
                             .children(archived_section),
                     ),
