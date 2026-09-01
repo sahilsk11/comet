@@ -8,6 +8,23 @@ Control your coding agents (Claude Code, Codex, Cursor, Grok, Hermes, Pi) locall
 
 Every device runs a small engine that stores sessions on that device. A new installation starts in local-only mode without an account or a network connection.
 
+## Side-by-side development apps
+
+Keep the installed `Zeron.app` as the stable baseline and provision each macOS
+worktree as an isolated named app:
+
+```sh
+./scripts/provision-dev-app.sh
+./scripts/provision-dev-app.sh --name "Hamilton" --harness hamilton
+./scripts/provision-dev-app.sh --name "Sidebar B" --icon /absolute/path/to/icon.png
+```
+
+Generated apps live under `~/Applications/Zeron Dev/` by default. Each has its
+own bundle id, data directory, engine IPC port, login callback port, and internal
+worktree directory, so multiple builds can run concurrently without modifying
+or locking the stable Zeron installation. Rerun the same command to rebuild the
+app from the current worktree.
+
 ## Install and run locally (Linux)
 
 ```bash

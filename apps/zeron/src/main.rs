@@ -197,7 +197,7 @@ fn main() -> anyhow::Result<()> {
                 workos_client_id: workos_client_id_from_env(&edge_token),
                 edge_token,
                 org_id: std::env::var("ZERON_ORG_ID").ok(),
-                default_harness: zeron_ui::HarnessId::ClaudeCode,
+                default_harness: harness_from_env(),
                 initial_url: cli.open_url,
             });
             Ok(())
@@ -241,6 +241,8 @@ fn harness_from_env() -> zeron_engine::HarnessId {
         Ok("grok") => zeron_engine::HarnessId::Grok,
         Ok("hermes") => zeron_engine::HarnessId::Hermes,
         Ok("pi") => zeron_engine::HarnessId::Pi,
+        Ok("hamilton") => zeron_engine::HarnessId::Hamilton,
+        Ok("opencode") => zeron_engine::HarnessId::Opencode,
         _ => zeron_engine::HarnessId::ClaudeCode,
     }
 }

@@ -106,12 +106,16 @@ fn app_key_bindings(macos: bool) -> Vec<KeyBinding> {
 /// at runtime (`cfg!`) so the whole module compiles and tests on Linux.
 pub fn app_menus() -> Vec<Menu> {
     let macos = cfg!(target_os = "macos");
+    let product = std::env::var("ZERON_APP_NAME")
+        .ok()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "Zeron".into());
 
     // macOS titles the first menu with the bundle/process name regardless of
     // what we pass, but gpui still wants a name.
     let mut app_items = vec![
         // Placeholder until a real about dialog exists (explicitly disabled).
-        MenuItem::action("About Zeron", About).disabled(true),
+        MenuItem::action(format!("About {product}"), About).disabled(true),
         MenuItem::separator(),
         MenuItem::action("Settings", shell::OpenSettings),
         MenuItem::separator(),
@@ -120,16 +124,16 @@ pub fn app_menus() -> Vec<Menu> {
         app_items.extend([
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("Hide Zeron", Hide),
+            MenuItem::action(format!("Hide {product}"), Hide),
             MenuItem::action("Hide Others", HideOthers),
             MenuItem::action("Show All", ShowAll),
             MenuItem::separator(),
         ]);
     }
-    app_items.push(MenuItem::action("Quit Zeron", Quit));
+    app_items.push(MenuItem::action(format!("Quit {product}"), Quit));
 
     let mut menus = vec![
-        Menu::new("Zeron").items(app_items),
+        Menu::new(product).items(app_items),
         // Standard clipboard verbs tied to the composer's existing actions via
         // their native selectors (`OsAction` → cut:/copy:/paste:/selectAll:),
         // so the OS Edit menu routes through the responder chain to the focused
