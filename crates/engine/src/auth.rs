@@ -893,18 +893,28 @@ async fn loopback_loop(listener: tokio::net::TcpListener, inner: Weak<AuthInner>
             break;
         };
         let Some(inner) = inner.upgrade() else { break };
-        tokio::spawn(async move {
-            if let Err(err) = handle_loopback_conn(stream, Auth { inner }).await {
+        let terminal = match handle_loopback_conn(stream, Auth { inner: Arc::clone(&inner) }).await {
+            Ok(terminal) => terminal,
+            Err(err) => {
                 tracing::debug!(error = %err, "auth: callback connection failed");
+                false
             }
-        });
+        };
+        if terminal {
+            // A successful (or otherwise consumed) callback is the end of
+            // this attempt. Release the registered port so another
+            // development variant can sign in without restarting this app.
+            let mut slot = inner.loopback.lock().await;
+            *slot = None;
+            break;
+        }
     }
 }
 
 async fn handle_loopback_conn(
     mut stream: tokio::net::TcpStream,
     auth: Auth,
-) -> Result<(), std::io::Error> {
+) -> Result<bool, std::io::Error> {
     // Read the request head (bounded; we only need the request line).
     let mut buf = Vec::with_capacity(2048);
     let mut chunk = [0u8; 1024];
@@ -925,8 +935,8 @@ async fn handle_loopback_conn(
     let target = request_line.split_whitespace().nth(1).unwrap_or("");
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
 
-    let (status, body) = if path != "/callback" {
-        ("404 Not Found", page("Not found."))
+    let (status, body, terminal) = if path != "/callback" {
+        ("404 Not Found", page("Not found."), false)
     } else {
         let params: HashMap<String, String> = query
             .split('&')
@@ -939,6 +949,7 @@ async fn handle_loopback_conn(
             (
                 "400 Bad Request",
                 page("Invalid or expired sign-in link. Start again from Zeron."),
+                false,
             )
         };
         match (code, state) {
@@ -948,6 +959,7 @@ async fn handle_loopback_conn(
                         Ok(()) => (
                             "200 OK",
                             page("Signed in. You can close this tab and return to Zeron."),
+                            true,
                         ),
                         Err(err) => {
                             tracing::info!(error = %err, "auth: discarded canceled callback exchange");
@@ -956,6 +968,7 @@ async fn handle_loopback_conn(
                                 page(
                                     "This sign-in was canceled. Start again from Zeron if you still want to enable sync.",
                                 ),
+                                true,
                             )
                         }
                     },
@@ -964,6 +977,7 @@ async fn handle_loopback_conn(
                         (
                             "502 Bad Gateway",
                             page("Sign-in failed during token exchange — check the Zeron logs."),
+                            true,
                         )
                     }
                 },
@@ -977,7 +991,8 @@ async fn handle_loopback_conn(
         body.len()
     );
     stream.write_all(response.as_bytes()).await?;
-    stream.shutdown().await
+    stream.shutdown().await?;
+    Ok(terminal)
 }
 
 fn page(message: &str) -> String {
