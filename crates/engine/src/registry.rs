@@ -496,6 +496,22 @@ pub fn default_registry() -> HarnessRegistry {
         Box::new(|| zeron_harness::AcpHarness::pi().installed()),
         Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::pi()) as Arc<dyn Harness>)),
     );
+    // Hamilton over its native ACP server. Hamilton owns the Aide and worker
+    // orchestration; Comet owns the chat document and renders its streamed
+    // text/tool events like every other harness.
+    registry.register_lazy(
+        HarnessDescriptor {
+            id: HarnessId::Hamilton,
+            name: "Hamilton".into(),
+            supports_steering: true,
+            steering_mode: SteeringMode::TurnBoundary,
+            reasoning_levels: Vec::new(),
+            installed: true,
+            enabled: None,
+        },
+        Box::new(|| zeron_harness::AcpHarness::hamilton().installed()),
+        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::hamilton()) as Arc<dyn Harness>)),
+    );
     // opencode over its NATIVE HTTP/SSE protocol (the one the opencode
     // desktop app speaks — `opencode serve` + the /global/event bus), same
     // lazy pattern: the static descriptor mirrors OpencodeHarness exactly.
@@ -577,6 +593,7 @@ mod tests {
                 HarnessId::Grok,
                 HarnessId::Hermes,
                 HarnessId::Pi,
+                HarnessId::Hamilton,
                 HarnessId::Opencode
             ]
         );
@@ -640,6 +657,11 @@ mod tests {
                 ReasoningLevel::Max
             ]
         );
+        let hamilton = registry.resolve(HarnessId::Hamilton).unwrap();
+        assert_eq!(hamilton.id(), HarnessId::Hamilton);
+        assert_eq!(hamilton.display_name(), "Hamilton");
+        assert_eq!(hamilton.steering_mode(), SteeringMode::TurnBoundary);
+        assert!(hamilton.reasoning_levels().is_empty());
     }
 
     /// Catalogs serialized by engines that predate the `installed`/`enabled`

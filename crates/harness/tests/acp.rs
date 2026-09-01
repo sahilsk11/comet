@@ -30,6 +30,10 @@ fn harness() -> AcpHarness {
     AcpHarness::grok().with_executable(fixture_path())
 }
 
+fn hamilton_harness() -> AcpHarness {
+    AcpHarness::hamilton().with_executable(fixture_path())
+}
+
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
         prompt: prompt.into(),
@@ -207,6 +211,26 @@ async fn happy_path_maps_chunks_tools_diffs_plans_and_commands() {
     // usage_update maps to nothing (context gauge, not per-turn tokens).
     assert!(!events.iter().any(|e| matches!(e, AgentEvent::Usage { .. })));
 
+    assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
+}
+
+#[tokio::test]
+async fn hamilton_uses_the_shared_acp_transport_with_its_own_identity() {
+    let (controls, _steer, _token) = controls();
+    let mut req = request("scenario:happy");
+    req.model = None;
+    let events = run_to_end(&hamilton_harness(), req, controls).await;
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::SessionStarted { harness, session_id, .. }
+                if *harness == HarnessId::Hamilton && session_id == "s-1"
+        )),
+        "{events:?}"
+    );
+    assert!(events.contains(&AgentEvent::TextDelta {
+        text: "Hello".into()
+    }));
     assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
 }
 
@@ -582,7 +606,7 @@ async fn hung_handshake_errors_instead_of_spinning_forever() {
     );
 }
 #[test]
-fn hermes_and_pi_descriptor_surfaces_match_registry_expectations() {
+fn hermes_pi_and_hamilton_descriptor_surfaces_match_registry_expectations() {
     let hermes = AcpHarness::hermes();
     assert_eq!(hermes.id(), HarnessId::Hermes);
     assert_eq!(hermes.display_name(), "Hermes");
@@ -606,6 +630,13 @@ fn hermes_and_pi_descriptor_surfaces_match_registry_expectations() {
             zeron_proto::ReasoningLevel::Max,
         ]
     );
+
+    let hamilton = AcpHarness::hamilton();
+    assert_eq!(hamilton.id(), HarnessId::Hamilton);
+    assert_eq!(hamilton.display_name(), "Hamilton");
+    assert!(hamilton.supports_steering());
+    assert_eq!(hamilton.steering_mode(), SteeringMode::TurnBoundary);
+    assert!(hamilton.reasoning_levels().is_empty());
 }
 
 #[tokio::test]

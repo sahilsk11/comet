@@ -379,6 +379,54 @@ fn pi_spec() -> AcpAgentSpec {
     }
 }
 
+fn hamilton_install_paths() -> Vec<PathBuf> {
+    let mut paths = npm_global_bins("hamilton-acp");
+    paths
+        .push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../hamilton/bin/hamilton-acp"));
+    // Development checkout convention: comet and hamilton are sibling repos.
+    // Packaged installs resolve through PATH or HAMILTON_ACP_EXECUTABLE.
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(parent) = cwd.parent()
+    {
+        paths.push(parent.join("hamilton").join("bin").join("hamilton-acp"));
+    }
+    paths
+}
+
+fn hamilton_spec() -> AcpAgentSpec {
+    AcpAgentSpec {
+        id: HarnessId::Hamilton,
+        display_name: "Hamilton",
+        executable: "hamilton-acp",
+        env_override: "HAMILTON_ACP_EXECUTABLE",
+        args: &[],
+        npm_package: None,
+        extra_paths: hamilton_install_paths,
+        cli_executable: "hamilton-acp",
+        cli_extra_paths: hamilton_install_paths,
+        install_hint: "hamilton-acp (searched PATH, the login shell's PATH, npm global bins, \
+             and a sibling hamilton checkout; install/link Hamilton or set \
+             HAMILTON_ACP_EXECUTABLE to its bin/hamilton-acp path)",
+        models: || {
+            vec![Model {
+                id: "default".into(),
+                label: "Hamilton default".into(),
+                description: Some("Runs Hamilton's configured Aide and worker models".into()),
+                reasoning_levels: Vec::new(),
+                options: Vec::new(),
+            }]
+        },
+        steering_mode: SteeringMode::TurnBoundary,
+        reasoning_levels: &[],
+        prompt_transform: identity_transform,
+        effort_values: default_effort_values,
+        ladder_extras: &[],
+        prompt_complete_extension: false,
+        prompt_stall: None,
+        stall_hint: "The Hamilton ACP process is likely wedged.",
+    }
+}
+
 /// Background-install managed npm adapters for agents whose CLI is present
 /// on this device, so a first chat never pays (or trips over) an npm run.
 /// Skips agents whose adapter is already resolvable; failures are logged and
@@ -490,6 +538,11 @@ impl AcpHarness {
     /// pi's RPC mode.
     pub fn pi() -> Self {
         Self::with_spec(pi_spec())
+    }
+
+    /// Hamilton's own ACP server, implemented in the separate Hamilton repo.
+    pub fn hamilton() -> Self {
+        Self::with_spec(hamilton_spec())
     }
 
     /// Use a fixed agent binary instead of PATH/known-location resolution.
