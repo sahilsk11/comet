@@ -23,7 +23,8 @@ Generated apps live under `~/Applications/Zeron Dev/` by default. Each has its
 own bundle id, data directory, engine IPC port, login callback port, and internal
 worktree directory, so multiple builds can run concurrently without modifying
 or locking the stable Zeron installation. Rerun the same command to rebuild the
-app from the current worktree.
+app from the current worktree. Hamilton builds automatically use the dedicated
+Hamilton app icon in `dist/macos/hamilton-icon-1024.png`.
 
 ## Install and run locally (Linux)
 

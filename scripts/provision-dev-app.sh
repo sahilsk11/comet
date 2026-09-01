@@ -26,7 +26,7 @@ usage() {
   printf '\nUsage: %s [options]\n\n' "$0"
   printf '%s\n' \
     '  --name NAME          Full app name (default: derived from the git branch)' \
-    '  --icon PATH          PNG or ICNS icon (default: Zeron development icon)' \
+    '  --icon PATH          PNG or ICNS icon (Hamilton has dedicated artwork)' \
     '  --install-root PATH  App destination root' \
     '  --data-dir PATH      Isolated app data directory' \
     '  --ipc-port PORT      Engine IPC port' \
@@ -173,7 +173,11 @@ PY
 chmod 755 "$stage_app/Contents/MacOS/zeron"
 
 if [[ -z "$ICON_SOURCE" ]]; then
-  ICON_SOURCE="$ROOT/dist/macos/icon-1024.png"
+  if [[ "$HARNESS" == "hamilton" ]]; then
+    ICON_SOURCE="$ROOT/dist/macos/hamilton-icon-1024.png"
+  else
+    ICON_SOURCE="$ROOT/dist/macos/icon-1024.png"
+  fi
 fi
 if [[ ! -f "$ICON_SOURCE" ]]; then
   printf 'icon not found: %s\n' "$ICON_SOURCE" >&2
