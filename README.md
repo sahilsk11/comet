@@ -16,6 +16,7 @@ worktree as an isolated named app:
 ```sh
 ./scripts/provision-dev-app.sh
 ./scripts/provision-dev-app.sh --name "Hamilton" --harness hamilton
+./scripts/provision-dev-app.sh --name "Hamilton Fork 1" --harness hamilton
 ./scripts/provision-dev-app.sh --name "Sidebar B" --icon /absolute/path/to/icon.png
 ```
 
@@ -25,6 +26,8 @@ worktree directory, so multiple builds can run concurrently without modifying
 or locking the stable Zeron installation. Rerun the same command to rebuild the
 app from the current worktree. Hamilton builds automatically use the dedicated
 Hamilton app icon in `dist/macos/hamilton-icon-1024.png`.
+The exact name `Hamilton` is reserved for a clean checkout of `main`; use a
+`Hamilton Fork ...` name for development worktrees.
 
 ## Install and run locally (Linux)
 

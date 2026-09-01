@@ -73,6 +73,21 @@ if [[ -z "${APP_NAME// }" || "$APP_NAME" == "Zeron" ]]; then
   exit 1
 fi
 
+if [[ "$APP_NAME" == "Hamilton" ]]; then
+  if [[ "$branch" != "main" ]]; then
+    printf 'Hamilton is reserved for a clean main checkout; name this worktree "Hamilton Fork ..."\n' >&2
+    exit 1
+  fi
+  if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
+    printf 'Hamilton is reserved for a clean main checkout; commit or discard worktree changes first\n' >&2
+    exit 1
+  fi
+  if [[ "$HARNESS" != "hamilton" ]]; then
+    printf 'the stable Hamilton app must use --harness hamilton\n' >&2
+    exit 1
+  fi
+fi
+
 slug="$(printf '%s' "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
 if [[ -z "$slug" ]]; then
   printf 'app name must contain at least one letter or number\n' >&2
