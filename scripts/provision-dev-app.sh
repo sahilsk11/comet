@@ -2,9 +2,12 @@
 # Build this worktree as an isolated, side-by-side macOS app.
 #
 # The stable /Applications/Zeron.app is never read, modified, or replaced.
-# Every generated app gets a unique bundle id, data directory, IPC port, auth
-# callback port, and internal worktree directory so several variants can run
-# concurrently without sharing engine locks or mutable state.
+# Every generated app gets a unique bundle id, data directory, IPC port, and
+# internal worktree directory so several variants can run concurrently without
+# sharing engine locks or mutable state. Development variants intentionally use
+# the stable registered WorkOS loopback callback port by default; sign them in
+# one at a time, then run them concurrently. --callback-port remains available
+# when a WorkOS wildcard redirect has been configured.
 
 set -euo pipefail
 
@@ -30,7 +33,7 @@ usage() {
     '  --install-root PATH  App destination root' \
     '  --data-dir PATH      Isolated app data directory' \
     '  --ipc-port PORT      Engine IPC port' \
-    '  --callback-port PORT Login callback port' \
+    '  --callback-port PORT Login callback port (default: registered 27641)' \
     '  --harness ID         Default harness, such as codex or hamilton' \
     '  --release            Build the release profile instead of debug' \
     '  --no-open            Provision without launching the app' \
@@ -101,7 +104,10 @@ if [[ -z "$IPC_PORT" ]]; then
   IPC_PORT="$((32000 + checksum % 9000))"
 fi
 if [[ -z "$CALLBACK_PORT" ]]; then
-  CALLBACK_PORT="$((42000 + checksum % 9000))"
+  # WorkOS validates redirect URIs before authentication. The production
+  # client already permits Zeron's native loopback callback on 27641, while
+  # fork-specific ports require a dashboard wildcard we do not control.
+  CALLBACK_PORT="27641"
 fi
 if [[ -z "$DATA_DIR" ]]; then
   DATA_DIR="$HOME/.zeron-dev/$instance_id"

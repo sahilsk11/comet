@@ -27,7 +27,11 @@ or locking the stable Zeron installation. Rerun the same command to rebuild the
 app from the current worktree. Hamilton builds automatically use the dedicated
 Hamilton app icon in `dist/macos/hamilton-icon-1024.png`.
 The exact name `Hamilton` is reserved for a clean checkout of `main`; use a
-`Hamilton Fork ...` name for development worktrees.
+`Hamilton Fork ...` name for development worktrees. Development variants use
+the registered loopback callback on port `27641` by default, so sign them in
+one at a time; their engine IPC ports and data remain isolated and they can run
+concurrently afterward. Pass `--callback-port` only when WorkOS has a wildcard
+loopback redirect configured.
 
 ## Install and run locally (Linux)
 

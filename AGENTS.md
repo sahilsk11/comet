@@ -12,6 +12,7 @@
 - Rerun the same command after changes to rebuild the same isolated app. Pass `--no-open` only when visual testing is not yet appropriate.
 - Use `--harness hamilton` for a Hamilton-first test app; the provisioner automatically applies Hamilton's dedicated icon. Do not hand-roll app bundles, reuse Zeron's data directory, or guess alternate ports.
 - Reserve the exact app name `Hamilton` for a clean `main` checkout. Name every development worktree `Hamilton Fork ...` (or another non-reserved variant) so it cannot replace the stable Hamilton app.
+- Development variants use the registered WorkOS callback port `27641` by default. Sign variants in one at a time; their IPC/data ports remain isolated for concurrent runtime testing. Use `--callback-port` only after a WorkOS wildcard loopback redirect is configured.
 - Each provisioned app must retain its generated bundle id, `~/.zeron-dev/...` data directory, IPC port, callback port, and worktree directory so multiple variants can run concurrently.
 
 ## Integration discipline
