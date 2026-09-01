@@ -181,6 +181,9 @@ exports = {
     "ZERON_APP_NAME": app_name,
     "ZERON_BUNDLE_ID": bundle_id,
     "ZERON_DEV_VARIANT": "1",
+    # Forked development apps are updated by rebuilding their worktree, never
+    # by following the official Zeron release feed or swapping their bundle.
+    "ZERON_DISABLE_UPDATES": "1",
 }
 if harness:
     exports["ZERON_HARNESS"] = harness

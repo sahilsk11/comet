@@ -14,6 +14,7 @@
 - Reserve the exact app name `Hamilton` for a clean `main` checkout. Name every development worktree `Hamilton Fork ...` (or another non-reserved variant) so it cannot replace the stable Hamilton app.
 - Development variants use the registered WorkOS callback port `27641` by default. Sign variants in one at a time; their IPC/data ports remain isolated for concurrent runtime testing. Use `--callback-port` only after a WorkOS wildcard loopback redirect is configured.
 - Each provisioned app must retain its generated bundle id, `~/.zeron-dev/...` data directory, IPC port, callback port, and worktree directory so multiple variants can run concurrently.
+- Provisioned development variants disable the native release checker and updater; update Hamilton variants by changing/rebasing the worktree and rebuilding them.
 
 ## Integration discipline
 

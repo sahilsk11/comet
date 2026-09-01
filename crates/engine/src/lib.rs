@@ -713,7 +713,7 @@ impl Engine {
                 .as_deref()
                 .is_some_and(|token| !token.trim().is_empty()),
         };
-        if edge_enabled {
+        if edge_enabled && zeron_update::updates_enabled() {
             // OS network-path events (macOS NWPathMonitor): the instant the
             // path returns every parked reconnect backoff redials, and while
             // the OS says there is no path the dial loops park instead of

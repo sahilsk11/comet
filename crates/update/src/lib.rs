@@ -33,6 +33,25 @@ pub const fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Whether this installation is allowed to contact the release feed or offer
+/// native self-updates. Development app variants set this explicitly so a
+/// Hamilton fork can only be updated by rebuilding from its worktree.
+pub fn updates_enabled() -> bool {
+    fn enabled(name: &str) -> bool {
+        matches!(
+            std::env::var(name)
+                .ok()
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("1") | Some("true") | Some("yes")
+        )
+    }
+    // ZERON_DEV_VARIANT covers bundles provisioned before the explicit
+    // ZERON_DISABLE_UPDATES export was added to the provisioning script.
+    !(enabled("ZERON_DISABLE_UPDATES") || enabled("ZERON_DEV_VARIANT"))
+}
+
 /// Background check cadence.
 const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 /// Retry sooner after a failed check (offline boot, transient edge error).
