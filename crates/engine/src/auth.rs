@@ -893,7 +893,14 @@ async fn loopback_loop(listener: tokio::net::TcpListener, inner: Weak<AuthInner>
             break;
         };
         let Some(inner) = inner.upgrade() else { break };
-        let terminal = match handle_loopback_conn(stream, Auth { inner: Arc::clone(&inner) }).await {
+        let terminal = match handle_loopback_conn(
+            stream,
+            Auth {
+                inner: Arc::clone(&inner),
+            },
+        )
+        .await
+        {
             Ok(terminal) => terminal,
             Err(err) => {
                 tracing::debug!(error = %err, "auth: callback connection failed");
