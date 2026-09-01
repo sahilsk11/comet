@@ -27,6 +27,7 @@ use zeron_engine::InstanceLock;
 use zeron_proto::{AuthState, WorkspaceScope};
 use zeron_rpc::methods;
 
+use crate::app_menus::{DecreaseFontSize, IncreaseFontSize, ResetFontSize};
 use crate::changes::{Changes, ChangesEvent};
 use crate::composer::{Composer, ComposerEvent, ComposerInput, ComposerInputEvent};
 use crate::icons::{self, icon};
@@ -4531,6 +4532,9 @@ impl Shell {
     /// the staged bundle. Elsewhere (managed/source installs) it is advisory
     /// (`zeron update`); click dismisses it for that version.
     fn render_update_strip(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !zeron_update::updates_enabled() {
+            return None;
+        }
         let status = self.state.read(cx).update.clone()?;
         if !status.update_available {
             return None;
@@ -7506,6 +7510,15 @@ impl Render for Shell {
             // macOS, Ctrl+, elsewhere) always land on the default section.
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
                 this.open_settings(SettingsSection::Devices, cx)
+            }))
+            .on_action(cx.listener(|_, _: &IncreaseFontSize, window, cx| {
+                crate::typography::increase_font_size(window, cx);
+            }))
+            .on_action(cx.listener(|_, _: &DecreaseFontSize, window, cx| {
+                crate::typography::decrease_font_size(window, cx);
+            }))
+            .on_action(cx.listener(|_, _: &ResetFontSize, window, cx| {
+                crate::typography::reset_font_size(window, cx);
             }))
             // Chat-scoped, unlike new-session — `cycle_session` holds the guard
             // and says why.

@@ -32,6 +32,9 @@ actions!(
         AppearanceSystem,
         AppearanceLight,
         AppearanceDark,
+        IncreaseFontSize,
+        DecreaseFontSize,
+        ResetFontSize,
     ]
 );
 
@@ -97,6 +100,15 @@ fn app_key_bindings(macos: bool) -> Vec<KeyBinding> {
             KeyBinding::new("alt-cmd-h", HideOthers, None),
             KeyBinding::new("cmd-m", Minimize, None),
             KeyBinding::new("cmd-w", CloseWindow, None),
+            KeyBinding::new("cmd-=", IncreaseFontSize, None),
+            KeyBinding::new("cmd--", DecreaseFontSize, None),
+            KeyBinding::new("cmd-0", ResetFontSize, None),
+        ]);
+    } else {
+        bindings.extend([
+            KeyBinding::new("ctrl-=", IncreaseFontSize, None),
+            KeyBinding::new("ctrl--", DecreaseFontSize, None),
+            KeyBinding::new("ctrl-0", ResetFontSize, None),
         ]);
     }
     bindings
@@ -152,12 +164,15 @@ pub fn app_menus() -> Vec<Menu> {
             MenuItem::os_action("Select All", composer::SelectAll, OsAction::SelectAll),
         ]),
     ];
-    // Appearance lives under View on every platform — it is the only View verb
-    // today, but "Appearance" as a top-level menu would read oddly next to Edit.
+    // Appearance and interface font sizing live under View on every platform.
     menus.push(Menu::new("View").items([
         MenuItem::action("Appearance: System", AppearanceSystem),
         MenuItem::action("Appearance: Light", AppearanceLight),
         MenuItem::action("Appearance: Dark", AppearanceDark),
+        MenuItem::separator(),
+        MenuItem::action("Increase Font Size", IncreaseFontSize),
+        MenuItem::action("Decrease Font Size", DecreaseFontSize),
+        MenuItem::action("Reset Font Size", ResetFontSize),
     ]));
     if macos {
         // Standard Window menu; macOS appends the open-window list itself.
@@ -266,7 +281,10 @@ mod tests {
             vec![
                 AppearanceSystem.name(),
                 AppearanceLight.name(),
-                AppearanceDark.name()
+                AppearanceDark.name(),
+                IncreaseFontSize.name(),
+                DecreaseFontSize.name(),
+                ResetFontSize.name(),
             ]
         );
     }
@@ -296,12 +314,16 @@ mod tests {
         assert_eq!(find(&macos, Quit.name()), Some(combo("cmd-q")));
         assert_eq!(find(&macos, CloseWindow.name()), Some(combo("cmd-w")));
         assert_eq!(find(&macos, Minimize.name()), Some(combo("cmd-m")));
+        assert_eq!(find(&macos, IncreaseFontSize.name()), Some(combo("cmd-=")));
+        assert_eq!(find(&macos, DecreaseFontSize.name()), Some(combo("cmd--")));
+        assert_eq!(find(&macos, ResetFontSize.name()), Some(combo("cmd-0")));
 
         let other = app_key_bindings(false);
         assert_eq!(
             find(&other, shell::OpenSettings.name()),
             Some(combo("ctrl-,"))
         );
+        assert_eq!(find(&other, IncreaseFontSize.name()), Some(combo("ctrl-=")));
         assert_eq!(find(&other, Quit.name()), None);
     }
 }

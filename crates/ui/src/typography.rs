@@ -417,6 +417,32 @@ pub fn set_font_size(size: UiFontSize, window: &mut Window, cx: &mut App) -> boo
     true
 }
 
+/// Move the interface size one step up in the persisted catalog.
+pub fn increase_font_size(window: &mut Window, cx: &mut App) -> bool {
+    let current = font_size(cx);
+    let next = UiFontSize::ALL
+        .into_iter()
+        .find(|candidate| candidate.pixels() > current.pixels())
+        .unwrap_or(current);
+    set_font_size(next, window, cx)
+}
+
+/// Move the interface size one step down in the persisted catalog.
+pub fn decrease_font_size(window: &mut Window, cx: &mut App) -> bool {
+    let current = font_size(cx);
+    let previous = UiFontSize::ALL
+        .into_iter()
+        .rev()
+        .find(|candidate| candidate.pixels() < current.pixels())
+        .unwrap_or(current);
+    set_font_size(previous, window, cx)
+}
+
+/// Restore the default interface size.
+pub fn reset_font_size(window: &mut Window, cx: &mut App) -> bool {
+    set_font_size(UiFontSize::default(), window, cx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
